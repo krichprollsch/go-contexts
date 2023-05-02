@@ -1,0 +1,426 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <title>Go Contexts</title>
+    <meta http-equiv="Content-Type" content="text/html; charset=UTF-8"/>
+    <style type="text/css">
+      @import url(https://fonts.googleapis.com/css?family=Yanone+Kaffeesatz);
+      @import url(https://fonts.googleapis.com/css?family=Droid+Serif:400,700,400italic);
+      @import url(https://fonts.googleapis.com/css?family=Ubuntu+Mono:400,700,400italic);
+
+      body { font-family: 'Droid Serif'; }
+      h1, h2, h3 {
+        font-family: 'Yanone Kaffeesatz';
+        font-weight: normal;
+      }
+      .blockquote {
+
+      }
+      .remark-code, .remark-inline-code { font-family: 'Ubuntu Mono'; }
+    </style>
+  </head>
+  <body>
+    <textarea id="source">
+
+class: center, middle
+
+# Go Contexts
+
+---
+
+# Goroutine
+
+Starting a goroutine in Go is *very* easy todo and cheap to run.
+
+```go
+package main
+
+import "fmt"
+
+func main() {
+	// Run a function synchronously.
+	fmt.Print("Hello")
+
+	// Run a function asynchronously, ie. in a goroutine.
+	go fmt.Println(" world!")
+}
+```
+
+---
+
+# Goroutine
+
+Starting a goroutine in Go is *very* easy todo and cheap to run.
+
+```go
+// see src/goroutine/main.go
+// [...]
+package main
+
+import "fmt"
+
+func main() {
+	// Run a function synchronously.
+	fmt.Print("Hello")
+
+	// Run a function asynchronously, ie. in a goroutine.
+	go fmt.Println(" world!")
+}
+```
+
+```sh
+$ go run goroutine/main.go
+Hello
+```
+
+---
+# Goroutine
+
+```go
+// see src/wait/main.go
+// [...]
+
+func main() {
+	// Run a function synchronously.
+	fmt.Print("Hello")
+
+	// done is a channel used to synchronize the goroutine and the main program.
+	done := make(chan struct{})
+
+	// Run a function asynchronously, ie. in a goroutine.
+	go func() {
+		fmt.Println(" world!")
+		// Once the function stops, we send a message in the channel.
+		done <- struct{}{}
+	}()
+
+	// Wait for the end message from the goroutine.
+	<-done
+}
+```
+
+---
+# Goroutine
+
+```go
+// see src/wait/main.go
+// [...]
+
+func main() {
+	// Run a function synchronously.
+	fmt.Print("Hello")
+
+	// done is a channel used to synchronize the goroutine and the main program.
+	done := make(chan struct{})
+
+	// Run a function asynchronously, ie. in a goroutine.
+	go func() {
+		fmt.Println(" world!")
+		// Once the function stops, we send a message in the channel.
+		done <- struct{}{}
+	}()
+
+	// Wait for the end message from the goroutine.
+	<-done
+}
+```
+
+```sh
+$ go run src/wait/main.go
+Hello world!
+```
+
+---
+
+# Goroutines can leak easily
+
+> Never start a goroutine without knowing how it will stop
+>
+> [Dave Cheney](https://dave.cheney.net/2016/12/22/never-start-a-goroutine-without-knowing-how-it-will-stop)
+
+---
+
+# What if I want to cancel a goroutine?
+
+You can't kill a running goroutine.
+
+```go
+// see src/slow/main.go
+// [...]
+
+// slow simulates a slow operation, like an HTTP request.
+func slow() {
+	time.Sleep(2 * time.Second)
+	fmt.Println(" world!")
+}
+
+// ...
+```
+
+---
+# What if I want to cancel a goroutine?
+
+```go
+// ...
+
+func main() {
+	// Run a function synchronously.
+	fmt.Print("Hello")
+
+	// done is a channel used to synchronize the goroutine and the main program.
+	done := make(chan struct{})
+
+	// Run a function asynchronously, ie. in a goroutine.
+	go func() {
+		slow()
+		// Once the function stops, we send a message in the channel.
+		done <- struct{}{}
+	}()
+
+	// Wait for the end message from the goroutine.
+	<-done
+}
+```
+
+```sh
+$ go run src/slow/main.go
+Hello world!
+```
+
+---
+
+# What if I want to cancel a goroutine?
+
+```go
+// see src/cancel/main.go
+// [...]
+
+// slow a simulates a slow operation, like an HTTP request.
+func slow(cancel <-chan struct{}) {
+	select {
+	// Simulate a long operation, like an HTTP request.
+	case <-time.After(2 * time.Second):
+		// nothing to do here
+	case <-cancel:
+		// operation is canceled, return early.
+		return
+	}
+
+	fmt.Println(" world!")
+}
+
+// ...
+```
+
+---
+# What if I want to cancel a goroutine?
+
+```go
+// ...
+
+func main() {
+	// Run a function synchronously.
+	fmt.Print("Hello")
+
+	// done is a channel used to synchronize the goroutine and the main program.
+	done := make(chan struct{})
+
+	// cancel is a channel used to send a cancelation message from the main
+	// program to the go routine.
+	cancel := make(chan struct{})
+
+	// Run a function asynchronously, ie. in a goroutine.
+	go func() {
+		slow(cancel)
+		// Once the function stops, we send a message in the channel.
+		done <- struct{}{}
+	}()
+
+	// Cancel the goroutine immediately.
+	cancel <- struct{}{}
+
+	// Wait for the end message from the goroutine.
+	<-done
+}
+```
+
+---
+# What if I want to cancel a goroutine?
+
+```sh
+$ go run src/cancel/main.go
+Hello
+```
+
+---
+
+# Context: a standardized way for cancelation.
+
+```go
+// A Context carries a deadline, cancellation signal, and request-scoped values
+// across API boundaries. Its methods are safe for simultaneous use by multiple
+// goroutines.
+type Context interface {
+    // Done returns a channel that is closed when this Context is canceled
+    // or times out.
+    Done() <-chan struct{}
+
+    // Err indicates why this context was canceled, after the Done channel
+    // is closed.
+    Err() error
+
+    // Deadline returns the time when this Context will be canceled, if any.
+    Deadline() (deadline time.Time, ok bool)
+
+    // Value returns the value associated with key or nil if none.
+    Value(key interface{}) interface{}
+}
+```
+
+[Context](https://pkg.go.dev/context#Context)
+
+---
+# Context: a standardized way for cancelation.
+
+```go
+// see src/context/main.go
+// [...]
+
+// slow simulates a slow operation, like an HTTP request.
+func slow(ctx context.Context) {
+	select {
+	// Simulate a long operation, like an HTTP request.
+	case <-time.After(2 * time.Second):
+		// nothing to do here
+	case <-ctx.Done():
+		// operation is canceled, return early.
+		return
+	}
+
+	fmt.Println(" world!")
+}
+
+// ...
+```
+
+---
+# Context: a standardized way for cancelation.
+
+```go
+// ...
+func main() {
+	// create a cancelable context for our main program.
+	ctx, cancel := context.WithCancel(context.Background())
+
+	// Run a function synchronously.
+	fmt.Print("Hello")
+
+	// done is a channel used to synchronize the goroutine and the main program.
+	done := make(chan struct{})
+
+	// Run a function asynchronously, ie. in a goroutine.
+	go func() {
+		slow(ctx)
+		// Once the function stops, we send a message in the channel.
+		done <- struct{}{}
+	}()
+
+	// Cancel the context.
+	cancel()
+
+	// Wait for the end message from the goroutine.
+	<-done
+}
+```
+---
+
+# Good practices
+
+By convention, context is the first function's argument.
+```go
+func F(ctx context.Context, ...) {
+```
+
+Do not store a context, pass it per function.
+[Contexts and structs](https://go.dev/blog/context-and-structs)
+
+```go
+type Cli struct {}
+
+func (cli Cli) List(ctx context.Context, ...) (error, []Items) {
+
+func (cli Cli) Get(ctx context.Context, ...) (error, Item) {
+```
+
+Do not pass a nil context, use `context.TODO` if unsure.
+
+Always call a created cancel context function.
+```go
+func F(ctx context.Context) {
+  ctx, cancel := context.WithCancel(ctx)
+  defer cancel()
+  // ....
+```
+
+---
+
+# Use Context with incoming HTTP request
+
+```go
+// see src/hserver/main.go
+// [...]
+
+func main() {
+	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		ctx := r.Context()
+		// Simulate a long operation, like an HTTP request.
+		select {
+		case <-ctx.Done():
+			fmt.Println("cancel", r.RemoteAddr)
+			return
+		case <-time.After(5 * time.Second):
+			// nothing to do here.
+		}
+		fmt.Fprintln(w, "done")
+	})
+
+	fmt.Fprintln(os.Stderr, http.ListenAndServe("127.0.0.1:4567", nil))
+}
+```
+
+* [Request.Context](https://pkg.go.dev/net/http#Request.Context)
+* [Server.BaseContext](https://pkg.go.dev/net/http#Server) to create an HTTP server with a base context
+
+---
+
+# Use Context with outgoing HTTP request
+
+```go
+req, err := http.NewRequestWithContext(
+  ctx, "GET", "https://clermontech.org/", nil,
+)
+if err != nil {
+  // handle error
+}
+```
+
+* [NewRequestWithContext](https://pkg.go.dev/net/http#NewRequestWithContext)
+
+---
+
+class: bottom, left
+
+# Thank you 🙏
+
+Pierre Tachoire<br>
+pierre@tch.re<br>
+[mamot.fr/@krichprollsch](https://mamot.fr/@krichprollsch)
+
+    </textarea>
+    <script src="remark-latest.min.js" type="text/javascript">
+    </script>
+    <script type="text/javascript">
+      var slideshow = remark.create();
+    </script>
+  </body>
+</html>

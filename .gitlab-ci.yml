@@ -1,0 +1,9 @@
+pages:
+  script:
+    - mkdir public
+    - cp -fr index.html remark-latest.min.js img public/
+  artifacts:
+    paths:
+       - public
+  only:
+    - master
